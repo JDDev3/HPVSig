@@ -1,0 +1,496 @@
+/* hpv_toggle.css */
+
+/* ============================================================================
+   HPV toggle (negative / positive side-by-side pills)
+   ========================================================================== */
+
+.hpv-toggle-container {
+  display: inline-flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 0.5rem;
+}
+
+.hpv-toggle-column {
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+.hpv-toggle-label {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.hpv-pill {
+  min-width: 120px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 1px solid #ced4da;
+  background-color: #f8f9fa;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease-out,
+    box-shadow 0.18s ease-out,
+    background-color 0.18s ease-out,
+    border-color 0.18s ease-out;
+}
+
+.hpv-toggle-negative .hpv-pill {
+  border-color: #e57373;
+}
+
+.hpv-toggle-positive .hpv-pill {
+  border-color: #64b5f6;
+}
+
+.hpv-pill:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  background-color: #ffffff;
+}
+
+.hpv-pill-animate {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  background-color: #e3f2fd;
+}
+
+/* ============================================================================
+   RNA-seq Preprocessing UI (PCA preprocessing badges, cards, plan diagram)
+   ========================================================================== */
+
+.pp-upload-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.pp-upload-row .form-group {
+  margin-bottom: 0;
+}
+.pp-upload-row .shiny-input-container {
+  margin-bottom: 0;
+  flex: 1 1 360px;
+  min-width: 280px;
+}
+
+/* Attribute lines (Normalization / Transformation / Scaling rows) */
+.pp-attr-line {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px dashed rgba(33, 37, 41, 0.12);
+}
+.pp-attr-line:last-child {
+  border-bottom: none;
+}
+
+.pp-attr-label {
+  width: 160px;
+  font-weight: 600;
+  color: rgba(33, 37, 41, 0.85);
+}
+
+.pp-attr-main {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pp-muted {
+  font-size: 13px;
+  color: rgba(33, 37, 41, 0.72);
+}
+
+/* ----------------------------------------------------------------------------
+   Generic small pills (used for counts + simple statuses)
+   ------------------------------------------------------------------------- */
+
+.pp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+
+  /* neutral baseline */
+  background: var(--bs-tertiary-bg, #f1f3f5);
+  color: var(--bs-body-color, #212529);
+  border: 1px solid var(--bs-border-color, rgba(33, 37, 41, 0.15));
+
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+
+  position: relative;
+  transform: translateZ(0);
+  transition:
+    box-shadow 0.18s ease-out,
+    transform 0.18s ease-out,
+    background-color 0.18s ease-out,
+    border-color 0.18s ease-out;
+}
+
+/* Bootstrap-like semantic variants for generic pills (kept for non-preproc badges) */
+.pp-pill-secondary { background: #e9ecef; color: #212529; }
+.pp-pill-success   { background: #198754; color: #ffffff; }
+.pp-pill-danger    { background: #dc3545; color: #ffffff; }
+.pp-pill-warning   { background: #ffc107; color: #212529; }
+.pp-pill-info      { background: #0dcaf0; color: #212529; }
+.pp-pill-primary   { background: #0d6efd; color: #ffffff; }
+.pp-pill-dark      { background: #343a40; color: #ffffff; }
+.pp-pill-light     { background: #f8f9fa; color: #212529; }
+
+/* ----------------------------------------------------------------------------
+   PCA preprocessing attribute pills
+   - Base pill is ALWAYS neutral grey.
+   - Attr group adds a left accent stripe.
+   - State adds a right accent stripe (green/red/yellow).
+   - Selection grids (bucket pickers) stay GREY until selected.
+   ------------------------------------------------------------------------- */
+
+/* Left stripes: attribute group (make these thick enough to be obvious) */
+.pp-pill--norm   { border-left: 10px solid rgba(13, 110, 253, 0.55); }  /* blue */
+.pp-pill--trans  { border-left: 10px solid rgba(111,  66, 193, 0.55); } /* purple */
+.pp-pill--scale  { border-left: 10px solid rgba(253, 126,  20, 0.55); } /* orange */
+.pp-pill--compat { border-left: 10px solid rgba(108, 117, 125, 0.50); } /* gray */
+
+/* Optional: slightly different baseline for compat chips */
+.pp-pill--compat {
+  background: rgba(248, 249, 250, 0.95);
+  color: rgba(33, 37, 41, 0.92);
+  border-color: rgba(108, 117, 125, 0.22);
+  font-weight: 750;
+}
+
+/* Right stripes: state (YES/NO/UNKNOWN) */
+.pp-pill--neutral { border-right: 10px solid rgba(108, 117, 125, 0.18); } /* subtle */
+.pp-pill--yes     { border-right: 10px solid rgba(25, 135, 84, 0.70); }   /* green */
+.pp-pill--no      { border-right: 10px solid rgba(220, 53, 69, 0.70); }   /* red */
+.pp-pill--unknown { border-right: 10px solid rgba(255, 193, 7, 0.78); }   /* yellow */
+
+/* ----------------------------------------------------------------------------
+   IMPORTANT: picker choices stay grey UNTIL selected
+   (applies only inside the bucket selection grid buttons)
+   ------------------------------------------------------------------------- */
+
+/* Force YES/NO/UNKNOWN pills inside pickers to look neutral when NOT selected */
+.pp-pick .pp-pill.pp-pill--yes,
+.pp-pick .pp-pill.pp-pill--no,
+.pp-pick .pp-pill.pp-pill--unknown {
+  border-right-width: 1px;
+  border-right-style: solid;
+  border-right-color: var(--bs-border-color, rgba(33, 37, 41, 0.15));
+}
+
+/* When selected, re-enable the real state stripe */
+.pp-pick.is-selected .pp-pill.pp-pill--yes {
+  border-right-width: 10px;
+  border-right-style: solid;
+  border-right-color: rgba(25, 135, 84, 0.70);
+}
+.pp-pick.is-selected .pp-pill.pp-pill--no {
+  border-right-width: 10px;
+  border-right-style: solid;
+  border-right-color: rgba(220, 53, 69, 0.70);
+}
+.pp-pick.is-selected .pp-pill.pp-pill--unknown {
+  border-right-width: 10px;
+  border-right-style: solid;
+  border-right-color: rgba(255, 193, 7, 0.78);
+}
+
+/* Neutral pills in pickers stay neutral (fine both selected/unselected) */
+.pp-pick .pp-pill.pp-pill--neutral {
+  border-right-width: 1px;
+  border-right-style: solid;
+  border-right-color: var(--bs-border-color, rgba(33, 37, 41, 0.15));
+}
+.pp-pick.is-selected .pp-pill.pp-pill--neutral {
+  border-right-width: 10px;
+  border-right-style: solid;
+  border-right-color: rgba(108, 117, 125, 0.18);
+}
+
+/* ---- Method accents (subtle, not overriding stripes) ---------------------- */
+
+.pp-pill--m-deseq2_sf { box-shadow: inset 0 0 0 1px rgba(102, 194, 165, 0.18); }
+.pp-pill--m-tmm       { box-shadow: inset 0 0 0 1px rgba(252, 141,  98, 0.18); }
+.pp-pill--m-cpm       { box-shadow: inset 0 0 0 1px rgba(141, 160, 203, 0.18); }
+.pp-pill--m-tpm       { box-shadow: inset 0 0 0 1px rgba(166, 216,  84, 0.18); }
+.pp-pill--m-fpkm      { box-shadow: inset 0 0 0 1px rgba(231, 138, 195, 0.18); }
+.pp-pill--m-upperquartile { box-shadow: inset 0 0 0 1px rgba(255, 217,  47, 0.16); }
+.pp-pill--m-quantile      { box-shadow: inset 0 0 0 1px rgba(229, 196, 148, 0.16); }
+
+/* NOTE: method_key "log2p0.1" becomes "log2p0-1" because you gsub non-alnum -> '-' */
+.pp-pill--m-log2p0-1  { box-shadow: inset 0 0 0 1px rgba(141, 211, 199, 0.16); }
+/* keep the old typo too (harmless) in case anything still emits it */
+.pp-pill--m-log2p1    { box-shadow: inset 0 0 0 1px rgba(141, 211, 199, 0.16); }
+
+.pp-pill--m-vst       { box-shadow: inset 0 0 0 1px rgba(190, 186, 218, 0.16); }
+.pp-pill--m-rlog      { box-shadow: inset 0 0 0 1px rgba(251, 128, 114, 0.16); }
+
+.pp-pill--m-zscore    { box-shadow: inset 0 0 0 1px rgba(204, 235, 197, 0.16); }
+.pp-pill--m-none      { box-shadow: inset 0 0 0 1px rgba(108, 117, 125, 0.14); }
+.pp-pill--m-unknown   { box-shadow: inset 0 0 0 1px rgba(255, 193,   7, 0.14); }
+
+.pp-pill--m-match     { box-shadow: inset 0 0 0 1px rgba( 25, 135, 84, 0.16); }
+.pp-pill--m-diff      { box-shadow: inset 0 0 0 1px rgba(220,  53, 69, 0.16); }
+
+/* Tier nuance */
+.pp-pill--tier-preferred   { font-weight: 800; }
+.pp-pill--tier-acceptable  { opacity: 0.94; }
+
+/* ----------------------------------------------------------------------------
+   Plan diagram
+   ------------------------------------------------------------------------- */
+
+.pp-diagram {
+  border: 1px solid rgba(33, 37, 41, 0.12);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(248, 249, 250, 0.65);
+}
+
+.pp-diag-btn {
+  border-radius: 14px;
+  padding: 8px 10px; /* ensure the inner pill isn't clipped */
+  background: #ffffff;
+  border: 1px solid rgba(33, 37, 41, 0.10);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.pp-diag-btn.btn:hover,
+.pp-diag-btn.btn:focus,
+.pp-diag-btn.btn:active,
+.pp-diag-btn.btn.active,
+.show > .pp-diag-btn.btn.dropdown-toggle {
+  background-color: #f8f9fa !important;  /* light hover */
+  color: #212529 !important;             /* keep text readable */
+  border-color: #adb5bd !important;
+  box-shadow: 0 0 0 0.12rem rgba(13, 110, 253, 0.15) !important;
+}
+
+
+.pp-diag-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: rgba(33, 37, 41, 0.80);
+}
+
+.pp-diag-arrow {
+  font-size: 18px;
+  color: rgba(33, 37, 41, 0.45);
+  padding: 0 4px;
+}
+
+/* ----------------------------------------------------------------------------
+   Grid / blocks for acceptable preprocessing
+   ------------------------------------------------------------------------- */
+
+.pp-acceptable-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.pp-acceptable-block {
+  flex: 1 1 260px;
+  min-width: 240px;
+}
+
+.pp-acceptable-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: rgba(33, 37, 41, 0.88);
+}
+
+.pp-acceptable-tier {
+  margin-bottom: 6px;
+}
+
+.pp-acceptable-tier-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: rgba(33, 37, 41, 0.60);
+  margin-bottom: 2px;
+}
+
+.pp-acceptable-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ----------------------------------------------------------------------------
+   Generic rows (used in plan + gene overlap)
+   ------------------------------------------------------------------------- */
+
+.pp-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.pp-label {
+  width: 180px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(33, 37, 41, 0.85);
+}
+
+.pp-value {
+  flex: 1 1 auto;
+}
+
+.pp-inline {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ----------------------------------------------------------------------------
+   Misc
+   ------------------------------------------------------------------------- */
+
+.wrap-pre {
+  white-space: pre-wrap;
+  font-family: var(--bs-font-monospace, monospace);
+  font-size: 13px;
+}
+
+/* ============================================================================
+   Step 2 "Bucket" editor (in-modal, replaces nested modals)
+   ========================================================================== */
+
+.pp-bucket {
+  margin-top: 12px;
+  border: 1px solid rgba(33, 37, 41, 0.10);
+  background: rgba(248, 249, 250, 0.70);
+  border-radius: 14px;
+  padding: 12px 12px;
+}
+
+.pp-bucket-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pp-bucket-title {
+  font-weight: 750;
+  color: rgba(33, 37, 41, 0.88);
+}
+
+.pp-bucket-subtitle {
+  font-size: 12px;
+  color: rgba(33, 37, 41, 0.62);
+  margin-top: 2px;
+}
+
+.pp-bucket-close {
+  border: 0;
+  background: transparent;
+  opacity: 0.7;
+}
+
+.pp-pick-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pp-pick {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Selected hint (DO NOT touch border-color; it would wipe the right-stripe color) */
+.pp-pick.is-selected .pp-pill {
+  box-shadow: 0 2px 10px rgba(13, 110, 253, 0.12) !important;
+  transform: translateY(-1px);
+}
+
+.pp-pick.is-disabled {
+  cursor: not-allowed;
+}
+
+.pp-pick.is-disabled .pp-pill {
+  opacity: 0.38;
+  filter: grayscale(0.4);
+}
+
+.pp-pick.is-dim .pp-pill {
+  opacity: 0.55;
+}
+
+/* small helper text blocks inside bucket */
+.pp-bucket-note {
+  font-size: 12px;
+  color: rgba(33, 37, 41, 0.68);
+  line-height: 1.25;
+  margin-top: 6px;
+}
+
+.pp-card-pill-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;      /* shrink-wrap to the pill */
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pp-card-pill-btn:focus {
+  outline: none;
+}
+
+/* Kill any bootstrap/button-ish outlines */
+.pp-card-pill-btn:focus,
+.pp-card-pill-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.pp-help-btn {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: 999px;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+}
+.pp-help-popover {
+  --bs-popover-max-width: 760px;
+}
+.pp-help-popover .popover-body {
+  max-height: 60vh;
+  overflow: auto;
+}
