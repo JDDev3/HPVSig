@@ -15,6 +15,8 @@ library(mclust)
 library(DT)
 library(DESeq2)
 library(biomaRt)
+library(zip)
+library(svglite)
 
 
 options(shiny.maxRequestSize = 9999*1024^2)
@@ -3879,8 +3881,12 @@ server <- function(input, output, session) {
       # 6. Zip everything
       owd <- setwd(rep_dir)
       on.exit(setwd(owd), add = TRUE)
-      files_to_zip <- list.files(rep_dir, recursive = FALSE)
-      utils::zip(zipfile = file, files = files_to_zip)
+      files_to_zip <- list.files(rep_dir, full.names = TRUE, recursive = FALSE)
+      zip::zipr(
+        zipfile = file,
+        files   = files_to_zip,
+        root    = rep_dir
+      )
     }
   )
 }
