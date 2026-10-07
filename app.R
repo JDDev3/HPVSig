@@ -17,6 +17,8 @@ library(DESeq2)
 library(biomaRt)
 library(zip)
 library(svglite)
+library(mclust)
+library(ComplexHeatmap)
 
 
 options(shiny.maxRequestSize = 9999*1024^2)
@@ -75,205 +77,6 @@ canon_trans_code <- function(code) {
   as.character(code)
 }
 
-
-normalize_label <- function(x) tolower(trimws(as.character(x)))
-
-is_unknown_label <- function(x) {
-  is_na <- is.na(x)
-  x_chr <- normalize_label(x)
-  unknown_patterns <- c(
-    "", "na", "n/a", "missing", "unknown", "unk",
-    "not done", "notdone", "nd", "n.d.", "."
-  )
-  is_na | x_chr %in% unknown_patterns
-}
-
-infer_binary_group <- function(x,
-                               flip = FALSE,
-                               drop_unknown = TRUE,
-                               allow_unknown_in_full = TRUE) {
-  x0 <- x
-  
-  # Keep both raw and trimmed character versions
-  x_chr_raw  <- as.character(x0)
-  x_chr_trim <- trimws(x_chr_raw)
-  
-  # Single source of truth for "unknown"
-  unknown_mask <- is_unknown_label(x0)
-  unknown_mask[is.na(unknown_mask)] <- TRUE
-  
-  # Define "known" for training/inference
-  known <- rep(TRUE, length(x0))
-  if (isTRUE(drop_unknown)) {
-    known <- !unknown_mask
-  }
-  
-  # Training labels used to infer the two levels
-  x_train_chr <- x_chr_trim[known]
-  x_train_chr <- x_train_chr[!is.na(x_train_chr)]
-  x_train_chr <- x_train_chr[nzchar(x_train_chr)]
-  
-  levs_obs <- unique(x_train_chr)
-  
-  if (length(levs_obs) != 2L) {
-    stop(sprintf(
-      "infer_binary_group() expects exactly 2 distinct non-unknown levels; found %d: %s",
-      length(levs_obs),
-      paste(levs_obs, collapse = ", ")
-    ))
-  }
-  
-  reason <- NULL
-  neg <- pos <- NULL
-  
-  # logical-like
-  if (is.logical(x0) || all(levs_obs %in% c("TRUE", "FALSE"))) {
-    neg <- "FALSE"
-    pos <- "TRUE"
-    reason <- "Logical detected: FALSE=negative, TRUE=positive."
-    
-  } else {
-    # numeric-like (handles "0"/"1" too)
-    suppressWarnings(num_vals <- as.numeric(levs_obs))
-    if (all(is.finite(num_vals))) {
-      ord <- order(num_vals)
-      neg <- levs_obs[ord[1]]
-      pos <- levs_obs[ord[2]]
-      reason <- "Numeric-like detected: smaller value=negative, larger value=positive."
-      
-    } else {
-      lev1 <- normalize_label(levs_obs[1])
-      lev2 <- normalize_label(levs_obs[2])
-      
-      neg_keywords <- c("neg","negative","hpv-","hpv -","no","none","absent",
-                        "wt","wildtype","control","nonhpv","non-hpv","hpv negative","0")
-      pos_keywords <- c("pos","positive","hpv+","hpv +","yes","present",
-                        "mut","mutant","case","hpv positive","1")
-      
-      has_any <- function(lbl, patterns) {
-        any(vapply(patterns, function(p) grepl(p, lbl, fixed = TRUE), logical(1)))
-      }
-      
-      lev1_is_neg <- has_any(lev1, neg_keywords)
-      lev2_is_neg <- has_any(lev2, neg_keywords)
-      lev1_is_pos <- has_any(lev1, pos_keywords)
-      lev2_is_pos <- has_any(lev2, pos_keywords)
-      
-      if (lev1_is_neg && lev2_is_pos) {
-        neg <- levs_obs[1]; pos <- levs_obs[2]
-        reason <- "Label keywords matched: first=negative-like, second=positive-like."
-      } else if (lev2_is_neg && lev1_is_pos) {
-        neg <- levs_obs[2]; pos <- levs_obs[1]
-        reason <- "Label keywords matched: second=negative-like, first=positive-like."
-      } else if (lev1_is_neg && !lev2_is_neg) {
-        neg <- levs_obs[1]; pos <- levs_obs[2]
-        reason <- "First level looks negative-like; treating other as positive."
-      } else if (lev2_is_neg && !lev1_is_neg) {
-        neg <- levs_obs[2]; pos <- levs_obs[1]
-        reason <- "Second level looks negative-like; treating other as positive."
-      } else if (lev1_is_pos && !lev2_is_pos) {
-        pos <- levs_obs[1]; neg <- levs_obs[2]
-        reason <- "First level looks positive-like; treating other as negative."
-      } else if (lev2_is_pos && !lev1_is_pos) {
-        pos <- levs_obs[2]; neg <- levs_obs[1]
-        reason <- "Second level looks positive-like; treating other as negative."
-      } else {
-        ord <- sort(levs_obs)
-        neg <- ord[1]; pos <- ord[2]
-        reason <- "Ambiguous labels; using alphabetical order (first=negative, second=positive)."
-      }
-    }
-  }
-  
-  if (isTRUE(flip)) {
-    tmp <- neg; neg <- pos; pos <- tmp
-    reason <- paste0(reason, " (User flip applied.)")
-  }
-  
-  # Use trimmed values for factor creation (avoids whitespace mismatch)
-  train_vals <- x_chr_trim[known]
-  train_group <- factor(train_vals, levels = c(as.character(neg), as.character(pos)))
-  train_group <- droplevels(train_group)
-  
-  if (any(is.na(train_group))) {
-    bad <- unique(train_vals[is.na(train_group)])
-    stop(sprintf(
-      "infer_binary_group(): training values did not match inferred levels. Unmatched: %s",
-      paste(bad, collapse = ", ")
-    ))
-  }
-  
-  # Full factor: unknowns may become NA
-  full_group <- factor(x_chr_trim, levels = c(as.character(neg), as.character(pos)))
-  
-  if (!isTRUE(allow_unknown_in_full) && any(is.na(full_group) & !unknown_mask)) {
-    bad <- unique(x_chr_trim[is.na(full_group) & !unknown_mask])
-    stop(sprintf(
-      "infer_binary_group(): some non-unknown values did not match inferred levels. Unmatched: %s",
-      paste(bad, collapse = ", ")
-    ))
-  }
-  
-  list(
-    train_group     = train_group,
-    full_group      = full_group,
-    neg             = levels(train_group)[1],
-    pos             = levels(train_group)[2],
-    reason          = reason,
-    observed_levels = levs_obs,
-    known_idx       = known
-  )
-}
-
-
-
-# apply thresholds learned on (x_train, group_train) to all samples in x_all
-threshold_predict_all <- function(x_all, x_train, group_train, res_list) {
-  stopifnot(is.factor(group_train), nlevels(group_train) == 2L)
-  
-  g_levels <- levels(group_train)
-  neg <- g_levels[1]
-  pos <- g_levels[2]
-  
-  if (is.null(names(x_all))) {
-    stop("x_all must have names = sample IDs for call mapping.")
-  }
-  
-  calls_mat <- list()
-  
-  for (nm in names(res_list)) {
-    res <- res_list[[nm]]
-    ev  <- res$evaluation
-    if (is.null(ev)) next
-    
-    thr <- ev$threshold
-    if (is.na(thr)) {
-      calls_mat[[paste0("call_", nm)]] <- rep(NA_character_, length(x_all))
-      next
-    }
-    
-    mean_pos <- mean(x_train[group_train == pos], na.rm = TRUE)
-    mean_neg <- mean(x_train[group_train == neg], na.rm = TRUE)
-    
-    if (mean_pos >= mean_neg) {
-      pred_pos_all <- x_all >= thr
-    } else {
-      pred_pos_all <- x_all <= thr
-    }
-    
-    call_vec <- ifelse(pred_pos_all, pos, neg)
-    calls_mat[[paste0("call_", nm)]] <- call_vec
-  }
-  
-  if (length(calls_mat) == 0) {
-    return(tibble::tibble(sample = names(x_all)))
-  }
-  
-  calls_df <- as.data.frame(calls_mat, stringsAsFactors = FALSE)
-  calls_df$sample <- names(x_all)
-  calls_df
-}
-
 ## ------------------------------------------------------------------
 ## PCA theme and plotting helpers
 ## ------------------------------------------------------------------
@@ -288,9 +91,7 @@ pca_theme <- function() {
     )
 }
 
-# Generic PCA plotting with count (%) in legend labels
-# Generic PCA plotting with count (%) in legend labels + optional point labels
-# Generic PCA plotting with count (%) in legend labels + optional point labels
+
 plot_pca_colored <- function(df, col_var, label, label_var = NULL) {
   df2 <- df
   
@@ -308,6 +109,23 @@ plot_pca_colored <- function(df, col_var, label, label_var = NULL) {
   )
   names(lab_map) <- levs
   
+  group_levels <- levels(df2[[col_var]])
+  
+  point_colors <- setNames(
+    if (length(group_levels)) {
+      scales::hue_pal()(length(group_levels))
+    } else {
+      character()
+    },
+    group_levels
+  )
+  
+  group_labels <- tolower(trimws(group_levels))
+  
+  point_colors[group_labels == "negative"] <- "#3B4992"
+  point_colors[group_labels == "positive"] <- "#EE0000"
+  point_colors[group_labels == "unknown"]  <- "#A6A4A4"
+  
   p <- ggplot(df2, aes(x = PC1, y = PC2, color = .data[[col_var]])) +
     geom_point(size = 4, alpha = 0.9) +
     labs(
@@ -316,7 +134,9 @@ plot_pca_colored <- function(df, col_var, label, label_var = NULL) {
       y     = "PC2",
       color = label
     ) +
-    scale_color_discrete(
+    scale_color_manual(
+      values = point_colors,
+      na.value = "#A6A4A4",
       labels = function(breaks) {
         out <- unname(lab_map[breaks])
         out[is.na(out)] <- breaks[is.na(out)]
@@ -480,10 +300,6 @@ ui <- fluidPage(
     )
   ),
   
-  # (Preprocessing overview card removed from main report area; preprocessing lives in the wizard
-  #  and a textual summary is written into the ZIP export.)
-  
-  # PCA + Threshold plots side by side
   fluidRow(
     column(
       6,
@@ -519,7 +335,7 @@ ui <- fluidPage(
     column(
       6,
       card(
-        card_header("ROC diagnostics (Youden)"),
+        card_header("ROC diagnostics"),
         card_body(
           shiny::fluidRow(
             shiny::column(
@@ -536,7 +352,6 @@ ui <- fluidPage(
     )
   ),
   
-  # Row 3: performance table full width
   fluidRow(
     column(
       12,
@@ -548,6 +363,32 @@ ui <- fluidPage(
       )
     )
   ),
+  
+  # Signature-gene expression diagnostic
+  fluidRow(
+    column(
+      12,
+      card(
+        card_header("Signature-gene heatmap"),
+        card_body(
+          tags$p(
+            class = "text-muted small",
+          ),
+          uiOutput("signature_heatmap_annotation_ui"),
+          textOutput("signature_heatmap_note"),
+          plotOutput(
+            "signature_heatmap_plot",
+            height = "1000px"
+          ),
+          downloadButton(
+            "download_signature_heatmap",
+            "Download heatmap PDF"
+          )
+        )
+      )
+    )
+  ),
+  
   
   # Export button
   fluidRow(
@@ -571,37 +412,50 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   
   wizard_step            <- reactiveVal(1)
+  
+  scoring_method <- reactiveVal("cohort")
+  
+  observeEvent(input$hpv_scoring_method, {
+    scoring_method(input$hpv_scoring_method)
+    
+    if (identical(input$hpv_scoring_method, "fixed")) {
+      pp_plan$norm <- "deseq2_sf"
+      pp_plan$trans <- "log2p0.1"
+      pp_plan$scale <- "no"
+    }
+  }, ignoreNULL = TRUE)
+  
   hpv_flip_state         <- reactiveVal(FALSE)
   example_defaults_applied <- reactiveVal(FALSE)
   
   
   pp_input <- reactiveValues(
-    norm_status    = "raw",  # "raw" | "normalized"
-    norm_method    = "unknown",     # only meaningful if norm_status == "normalized"
-    trans_applied  = "no",          # "yes" | "no"
-    trans_method   = "log2p0.1",      # only meaningful if trans_applied == "yes"
-    scale_applied  = "no"           # "yes" | "no"
+    norm_status    = "raw", 
+    norm_method    = "unknown",     
+    trans_applied  = "no",          
+    trans_method   = "log2p0.1",     
+    scale_applied  = "no"           
   )
   
   
   pp_plan <- reactiveValues(
-    # what the app should APPLY (only when allowed by pp_input)
-    norm  = "deseq2_sf",          # plan normalization if pp_input$norm_status=="raw"
-    trans = "log2p0.1",             # plan transformation if pp_input$trans_applied=="none"
-    scale = "no"                  # "no" | "yes"
+
+    norm  = "deseq2_sf",          
+    trans = "log2p0.1",             
+    scale = "no"                  
   )
   
   get_pp_state <- shiny::reactive({
     list(
       norm_status    = pp_input$norm_status,
       norm_method    = pp_input$norm_method,
-      log_applied    = pp_input$trans_applied,   # "yes"/"no"
-      log_method     = pp_input$trans_method,    # "log2p0.1"/"vst"/"rlog"/"unknown" (only meaningful if log_applied=="yes")
-      scaled_applied = pp_input$scale_applied,   # "yes"/"no"
+      log_applied    = pp_input$trans_applied,   
+      log_method     = pp_input$trans_method,    
+      scaled_applied = pp_input$scale_applied,   
       
-      raw_norm_plan  = pp_plan$norm,             # plan normalization (if input is raw)
-      plan_trans     = pp_plan$trans,            # plan transform (if input not transformed)
-      plan_scale     = pp_plan$scale             # "yes"/"no"
+      raw_norm_plan  = pp_plan$norm,             
+      plan_trans     = pp_plan$trans,            
+      plan_scale     = pp_plan$scale            
     )
   })
   
@@ -687,8 +541,8 @@ server <- function(input, output, session) {
         rowsum(m, group = rownames(m), reorder = FALSE)  # sum for counts
       } else {
         sm <- rowsum(m, group = rownames(m), reorder = FALSE)
-        n  <- as.numeric(table(rownames(m)))
-        n  <- n[rownames(sm)]
+        n <- table(rownames(m))
+        n <- as.numeric(n[rownames(sm)])
         sweep(sm, 1, n, "/")                             # mean otherwise
       }
     }
@@ -905,15 +759,12 @@ server <- function(input, output, session) {
     # 2) Plan: normalization (only meaningful if user said raw)
     # ----------------------------
     if (!lock_norm) {
-      # Pick a sensible default; avoid changing if already set
       if (is.null(st$raw_norm_plan) || !nzchar(st$raw_norm_plan)) {
         if (!hard_no_counts) {
           apply_preproc_state(raw_norm_plan = "deseq2_sf")
         }
       } else {
-        # If current choice is invalid given constraints, fall back
         if (hard_no_counts) {
-          # Can't apply any count-based normalization safely; leave as-is and warn
           showNotification(
             "Auto-select: count-based normalization cannot be applied because negative values are present. Plan normalization left unchanged.",
             type = "warning",
@@ -927,7 +778,6 @@ server <- function(input, output, session) {
     # 3) Plan: transformation
     # ----------------------------
     if (!lock_trans) {
-      # If negatives present, we cannot safely apply log2p0.1 in-app per your preprocess_for_pca()
       if (hard_no_log) {
         apply_preproc_state(plan_trans = "none")
       } else {
@@ -935,7 +785,6 @@ server <- function(input, output, session) {
         if (isTRUE(feat$likely_loglike)) {
           apply_preproc_state(plan_trans = "none")
           
-          # IMPORTANT: don't change input, but warn user their INPUT description might be off
           showNotification(
             sprintf(
               "Auto-select: matrix looks already log-scale (q99=%.1f). Plan sets Transformation = None to avoid double-logging. If you know it was already logged, update Input → Transformation accordingly.",
@@ -1082,9 +931,9 @@ server <- function(input, output, session) {
     gene_col <- df[[1]]
     mat_df   <- df[, -1, drop = FALSE]
     
-    num_cols <- which(vapply(mat_df, is.numeric, logical(1)))
-    validate(need(length(num_cols) >= 1, "Need at least one numeric sample column."))
-    mat_df <- mat_df[, num_cols, drop = FALSE]
+    mat_df[] <- lapply(mat_df, function(column) {
+      as.numeric(as.character(column))
+    })
     
     mat <- as.matrix(mat_df)
     rownames(mat) <- trimws(as.character(gene_col))
@@ -1092,7 +941,7 @@ server <- function(input, output, session) {
     mat <- harmonize_gene_ids_once(
       mat       = mat,
       ref_genes = FILTER_GENE_LIST,
-      dds       = NULL,              # no rowData for TSV
+      dds       = NULL,
       min_match = 20,
       assume_counts = assume_counts
     )
@@ -1129,7 +978,7 @@ server <- function(input, output, session) {
     }
     
     if (nrow(mat) < 3) msgs <- c(msgs, "Need at least 3 filtered genes for PCA.")
-    if (ncol(mat) < 2) msgs <- c(msgs, "Need at least 2 samples for PCA.")
+    if (ncol(mat) < 1) msgs <- c(msgs, "Need at least one sample.")
     
     # TSV-specific light check (only if it's a data.frame/tibble)
     if (inherits(x, c("data.frame", "tbl_df"))) {
@@ -1196,9 +1045,8 @@ server <- function(input, output, session) {
   })
   
   
-  # effective pipeline for PCA (resulting preprocessing before PCAtools::pca)
+
   preproc_effective <- reactive({
-    # Represents the state of the matrix *entering PCA* after any app-applied transforms.
     
     norm_status    <- pp_input$norm_status
     norm_method    <- pp_input$norm_method
@@ -1208,7 +1056,6 @@ server <- function(input, output, session) {
     raw_plan       <- pp_plan$norm
     plan_scale     <- pp_plan$scale
     
-    # Canonical codes for matching against reference
     norm_code <- if (scaled_applied == "yes") {
       "as_is"
     } else if (norm_status == "raw") {
@@ -1290,7 +1137,6 @@ server <- function(input, output, session) {
   })
   
   preproc_compatibility <- reactive({
-    # Reference PCA expectations (hard-coded)
     ref_norm_code  <- "deseq2_sf"
     ref_log_code   <- "log2p0.1"
     ref_scale_code <- "none"
@@ -1406,7 +1252,7 @@ server <- function(input, output, session) {
     # Current user-selected preprocessing state (no auto/user provenance)
     st <- get_pp_state()
     
-    # ---- Canonical tri-state inputs (YOUR requested logic) -------------------
+    # ---- Canonical tri-state inputs -------------------
     # norm_status:  raw -> no, unknown -> unknown, anything else -> yes
     norm_in <- st$norm_status %||% "unknown"
     norm_in_state <- if (identical(norm_in, "raw")) {
@@ -1986,12 +1832,6 @@ server <- function(input, output, session) {
   output$preproc_plan_ui <- renderUI({
     req(rna_raw())
     
-    # -----------------------------------------------------------------------
-    # 1) INPUT tri-state (what the uploaded matrix ALREADY is)
-    #    norm_status: "raw" -> no ; "unknown" -> unknown ; else -> yes
-    #    trans_applied: c("none","no") -> no ; "unknown" -> unknown ; else -> yes
-    #    scale_applied: c("none","no") -> no ; "unknown" -> unknown ; else -> yes
-    # -----------------------------------------------------------------------
     
     norm_in  <- pp_input$norm_status   %||% "unknown"
     trans_in <- pp_input$trans_applied %||% "unknown"
@@ -2027,7 +1867,7 @@ server <- function(input, output, session) {
     
     plan_norm  <- pp_plan$norm  %||% "deseq2_sf"
     plan_trans <- pp_plan$trans %||% "log2p0.1"
-    plan_scale <- pp_plan$scale %||% "no"         # expected: "yes" or "no"
+    plan_scale <- pp_plan$scale %||% "no"       
     
     # Hard constraints:
     # - If input already scaled: do NOT do anything in-app (normalize/log/scale)
@@ -2200,6 +2040,16 @@ server <- function(input, output, session) {
         )
       ),
       card_body(
+        radioButtons(
+          "hpv_scoring_method",
+          "HPV-Sig analysis",
+          choices = c(
+            "Cohort-based" = "cohort",
+            "Fixed HNSCC" = "fixed"
+          ),
+          selected = isolate(scoring_method()),
+          inline = TRUE
+        ),
         tags$div(style = "font-weight:600; margin-bottom:6px;",
                  "Plan steps (click to adjust):"),
         tags$div(
@@ -2230,8 +2080,6 @@ server <- function(input, output, session) {
     
     st <- get_pp_state()
     
-    # Locks are based ONLY on what the user said the INPUT already is
-    # (treating unknown as "not locked")
     lock_norm  <- identical(st$scaled_applied, "yes") || identical(st$norm_status, "normalized")
     lock_trans <- identical(st$scaled_applied, "yes") || identical(st$log_applied, "yes")
     lock_scale <- identical(st$scaled_applied, "yes")
@@ -2535,7 +2383,7 @@ server <- function(input, output, session) {
     method_key <- if (state == "yes") "match" else "diff"
     
     pill <- pp_attr_pill(
-      status,                      # first arg = text
+      status,                      
       attr       = "compat",
       state      = state,
       tooltip    = reason,
@@ -2584,18 +2432,15 @@ server <- function(input, output, session) {
       pp_input$norm_status <- "normalized"
     }
     
-    # FIX: input_trans sends method/none; store as (applied yes/no) + method
     if (kind0 == "input_trans") {
       if (identical(value, "none")) {
         pp_input$trans_applied <- "no"
-        # pp_input$trans_method can stay as-is (it’s irrelevant when trans_applied=="no")
       } else {
         pp_input$trans_applied <- "yes"
-        pp_input$trans_method  <- value  # log2p0.1/vst/rlog/unknown
+        pp_input$trans_method  <- value  
       }
     }
     
-    # FIX: input_scale sends none/zscore; store as yes/no
     if (kind0 == "input_scale") {
       pp_input$scale_applied <- if (identical(value, "zscore")) "yes" else "no"
     }
@@ -2735,13 +2580,31 @@ server <- function(input, output, session) {
   ## -----------------------------
   ## Reference PCA model
   ## -----------------------------
-  hnscc_pca_reactive <- shiny::reactive({
-    readRDS("App_files/hpv_signature_tcga_hnscc_pca_model.rds")
+  hnscc_reference_data <- reactive({
+    list(
+      pca = readRDS(
+        "App_files/hpv_signature_tcga_hnscc_pca_model.rds"
+      ),
+      tcga = readRDS(
+        "App_files/tcga_primary_hnc.rds"
+      )
+    )
+  })
+  
+  hnscc_pca_reactive <- reactive({
+    hnscc_reference_data()$pca
   })
   
   rna_dds_obj <- reactive({
     x <- rna_raw()
-    if (inherits(x, "DESeqDataSet")) x else NULL
+    
+    if (!inherits(x, "DESeqDataSet")) return(NULL)
+    
+    selected_assay <- rds_selected_assay() %||%
+      SummarizedExperiment::assayNames(x)[[1]]
+    
+    # Reuse stored normalization factors only for the original counts assay.
+    if (identical(selected_assay, "counts")) x else NULL
   })
   
   
@@ -2769,7 +2632,6 @@ server <- function(input, output, session) {
         return(norm_mat)
       }
       
-      # fallback TSV-only counts
       dds <- DESeq2::DESeqDataSetFromMatrix(
         countData = counts_mat,
         colData   = data.frame(row.names = colnames(counts_mat)),
@@ -2813,6 +2675,11 @@ server <- function(input, output, session) {
     
     mat_num <- mat_full
     
+    validate(need(
+      all(is.finite(mat_num)),
+      "Expression data contain missing or non-finite values. Resolve these before running the analysis."
+    ))
+    
     # If input already scaled, do not modify; still filter to signature genes for PCA
     if (identical(pp_input$scale_applied, "yes")) {
       mat_proc <- mat_num
@@ -2839,14 +2706,11 @@ server <- function(input, output, session) {
     mat_proc <- mat_num
     
     # 1) Normalize (ONLY if user says raw) — do this on FULL gene set
-    # IMPORTANT: if we plan VST/rlog, skip separate normalization; DESeq2 handles size factors internally.
     if (identical(pp_input$norm_status, "raw") && !(tr_plan %in% c("vst", "rlog"))) {
       validate(need(!any(mat_num < 0, na.rm = TRUE),
                     "Raw counts-based normalization selected but matrix contains negative values."))
       method <- pp_plan$norm %||% "deseq2_sf"
       mat_proc <- apply_raw_normalization(mat_num, method, dds_obj = dds_obj)
-      mat_proc[!is.finite(mat_proc)] <- 0
-      mat_proc[is.na(mat_proc)] <- 0
     }
     
     # 2) Transform unless user says already transformed — do this on FULL gene set
@@ -2877,8 +2741,6 @@ server <- function(input, output, session) {
           SummarizedExperiment::assay(DESeq2::rlog(dds, blind = TRUE))
         }
         
-        mat_proc[!is.finite(mat_proc)] <- 0
-        mat_proc[is.na(mat_proc)] <- 0
         
       } else if (tr_plan == "log2p0.1") {
         
@@ -2897,8 +2759,10 @@ server <- function(input, output, session) {
       }
     }
     
-    mat_proc[!is.finite(mat_proc)] <- 0
-    mat_proc[is.na(mat_proc)] <- 0
+    validate(need(
+      all(is.finite(mat_proc)),
+      "Normalization or transformation produced missing or non-finite values. Check the input data and preprocessing settings."
+    ))
     
     # 3) Filter AFTER normalization/transform (size factors come from FULL matrix)
     if (!is.null(FILTER_GENE_LIST) && length(FILTER_GENE_LIST) > 0) {
@@ -2916,7 +2780,18 @@ server <- function(input, output, session) {
     )
   }
   
-  
+  ## -----------------------------
+  ## Fixed HNSCC reference
+  ## -----------------------------
+  fixed_hnscc_reference <- reactive({
+    reference <- hnscc_reference_data()
+    
+    build_fixed_hnscc(
+      pca = reference$pca,
+      tcga = reference$tcga
+    )
+  })
+ 
   ## -----------------------------
   ## PCA
   ## -----------------------------
@@ -2924,23 +2799,96 @@ server <- function(input, output, session) {
     mat <- rna_matrix_full()
     req(mat)
     
-    pp <- preprocess_for_pca(mat, dds_obj = rna_dds_obj())
-    p <- PCAtools::pca(
-      pp$mat_proc,
-      metadata  = NULL,
-      center    = TRUE,
-      scale     = pp$scale_unit,
-      removeVar = 0,
-      rank      = min(10, ncol(pp$mat_proc) - 1)
+    pp <- preprocess_for_pca(
+      mat,
+      dds_obj = rna_dds_obj()
     )
     
-    # Align sign only if preprocessing is compatible with reference
-    if (isTRUE(pp$comparable)) {
-      hnscc_pca <- hnscc_pca_reactive()
-      aln <- align_pcatools_pc_sign(hnscc_pca, p, pc = "PC1")
-      p   <- aln$new_pca_aligned
+    if (identical(scoring_method(), "fixed")) {
+      
+      validate(
+        need(
+          isTRUE(pp$comparable),
+          paste(
+            "Fixed HNSCC scoring requires compatible preprocessing:",
+            "DESeq2 size-factor normalization, log2(x + 0.1),",
+            "and no gene-wise scaling."
+          )
+        ),
+        need(
+          !isTRUE(pp$scale_unit),
+          "Turn off gene-wise scaling for fixed HNSCC scoring."
+        )
+      )
+      
+      model <- fixed_hnscc_reference()
+      prediction <- predict_fixed_hnscc(pp$mat_proc, model)
+      
+      return(list(
+        rotated = prediction$scores,
+        loadings = as.data.frame(model$pca_loadings),
+        fixed_calls = prediction$calls,
+        missing_genes = prediction$missing_genes,
+        fixed_reference = model,
+        signature_expression = pp$mat_proc,
+        scoring_method = "fixed"
+      ))
     }
     
+    validate(need(
+      ncol(pp$mat_proc) >= 2L,
+      "Cohort-based PCA requires at least two samples."
+    ))
+    
+    p <- PCAtools::pca(
+      pp$mat_proc,
+      metadata = NULL,
+      center = TRUE,
+      scale = pp$scale_unit,
+      removeVar = 0,
+      rank = min(10, ncol(pp$mat_proc) - 1)
+    )
+    
+    p$hpv_positive_high <- NA
+    
+    if (isTRUE(pp$comparable)) {
+      ref <- hnscc_pca_reactive()
+      aln <- align_pcatools_pc_sign(ref, p, pc = "PC1")
+      p <- aln$new_pca_aligned
+      
+      # Establish HPV direction from HNSCC labels only.
+      md <- as.data.frame(ref$metadata)
+      ids <- rownames(ref$rotated)
+      
+      if (is.finite(aln$cor_loadings) && aln$cor_loadings > 0 &&
+          "hpv_status" %in% names(md) &&
+          all(ids %in% rownames(md))) {
+        labels <- normalize_label(md[ids, "hpv_status"])
+        scores <- ref$rotated$PC1
+        
+        pos <- which(labels == "positive" & is.finite(scores))
+        neg <- which(labels == "negative" & is.finite(scores))
+        
+        if (length(pos) && length(neg)) {
+          difference <- mean(scores[pos]) - mean(scores[neg])
+          
+          if (is.finite(difference) && difference != 0) {
+            p$hpv_positive_high <- difference > 0
+          }
+        }
+      }
+    }
+    
+    # Cache the GMM with PCA, independently of clinical information.
+    p$cohort_gmm <- threshold_gmm(
+      p$rotated[order(rownames(p$rotated)), "PC1"],
+      group = NULL,
+      method = "equal_component",
+      fallback = "none"
+    )
+    
+    p$scoring_method <- "cohort"
+    p$signature_expression <- pp$mat_proc
     p
   })
   
@@ -2953,16 +2901,49 @@ server <- function(input, output, session) {
   
   output$pca_loadings_plot <- shiny::renderPlot({
     req(analysis())
-    req(pca_res())
-    comp <- preproc_compatibility()
-    if (!isTRUE(comp$compatible)) {
+    res <- analysis()
+    
+    if (identical(res$scoring_method, "fixed")) {
+      p <- res$pca_object
+      
       plot.new()
-      text(0.5, 0.5, "Loadings correlation suppressed:\npreprocessing not compatible with reference.", cex = 1.2)
+      text(
+        0.5, 0.55,
+        "Fixed HNSCC loadings were used.",
+        cex = 1.2
+      )
+      text(
+        0.5, 0.4,
+        sprintf(
+          "%d of %d signature genes available.",
+          length(p$fixed_reference$genes) - length(p$missing_genes),
+          length(p$fixed_reference$genes)
+        ),
+        cex = 1.1
+      )
+      
       return(invisible())
     }
-    plot_pcatools_loadings_correlation(hnscc_pca_reactive(), pca_res(), pc = "PC1")
-  })
-  
+    
+    req(res$pca_object)
+    comp <- res$preprocessing$compatibility
+    
+    if (!isTRUE(comp$compatible)) {
+      plot.new()
+      text(
+        0.5, 0.5,
+        "Loadings correlation suppressed:\npreprocessing not compatible with reference.",
+        cex = 1.2
+      )
+      return(invisible())
+    }
+    
+    plot_pcatools_loadings_correlation(
+      hnscc_pca_reactive(),
+      res$pca_object,
+      pc = "PC1"
+    )
+  })  
   ## -----------------------------
   ## Clinical data
   ## -----------------------------
@@ -3058,9 +3039,14 @@ server <- function(input, output, session) {
     req(clin_raw(), input$hpv_col)
     col <- clin_raw()[[input$hpv_col]]
     
+    known_levels <- unique(
+      trimws(as.character(col[!is_unknown_label(col)]))
+    )
+    if (length(known_levels) != 2L) return(NULL)
+    
     infer_binary_group(
       x             = col,
-      flip          = FALSE,              # "auto guess" (toggle applies flip)
+      flip          = FALSE,             
       drop_unknown  = TRUE
     )
   })
@@ -3104,6 +3090,15 @@ server <- function(input, output, session) {
     
     col <- clin_raw()[[input$hpv_col]]
     
+    known_levels <- unique(
+      trimws(as.character(col[!is_unknown_label(col)]))
+    )
+    if (length(known_levels) != 2L) {
+      return(
+        "GMM can run without two clinical classes; comparative metrics will be unavailable."
+      )
+    }
+    
     inf <- infer_binary_group(
       col,
       flip = isTRUE(hpv_flip_state()),
@@ -3146,9 +3141,20 @@ server <- function(input, output, session) {
     if (length(msgs) == 0) {
       hpv <- df[[input$hpv_col]]
       known <- !is_unknown_label(hpv)
-      nlev <- length(unique(hpv[known]))
-      if (nlev < 2) {
-        msgs <- c(msgs, "HPV status column must have at least 2 distinct non-unknown values.")
+      nlev <- length(unique(trimws(as.character(hpv[known]))))
+      
+      if (nlev > 2L) {
+        msgs <- c(
+          msgs,
+          "HPV status must have no more than two non-unknown levels."
+        )
+      }
+      
+      if (nlev < 2L && identical(scoring_method(), "fixed")) {
+        msgs <- c(
+          msgs,
+          "Fixed-mode clinical evaluation requires two known HPV levels."
+        )
       }
     }
     
@@ -3246,7 +3252,7 @@ server <- function(input, output, session) {
             6,
             h4("If clinical data is provided"),
             tags$ul(
-              tags$li("Runs ROC + Youden, Gaussian (auto), and GMM thresholding on PC1 (using non-unknown HPV values)."),
+              tags$li("Fits GMM using all RNA-seq samples. ROC + Youden and Gaussian thresholds use samples with known HPV labels."),
               tags$li("Computes sensitivity, specificity, and accuracy for each method."),
               tags$li("Appends threshold-based HPV calls to your clinical dataset; unknowns get NA in HPV status but still get call assignments.")
             )
@@ -3323,226 +3329,35 @@ server <- function(input, output, session) {
   ## -----------------------------
   ## Main analysis
   ## -----------------------------
+  
   analysis <- eventReactive(input$generate_report, {
-    scores <- pca_scores()
-    pc_df  <- scores %>% dplyr::select(sample, dplyr::starts_with("PC"))
+    include_clinical <- identical(input$include_clin, "Yes")
+    pca <- pca_res()
     
-    include_clinical <- !is.null(input$include_clin) && input$include_clin == "Yes"
-    
-    if (include_clinical) {
-      clin <- clin_raw()
-      validate(need(!is.null(clin), "Clinical data not available."))
-      
-      sample_col <- input$sample_id_col
-      hpv_col    <- input$hpv_col
-      
-      validate(
-        need(sample_col %in% names(clin), "Sample ID column must be valid."),
-        need(hpv_col %in% names(clin), "HPV status column must be valid.")
-      )
-      
-      # Ensure sample IDs compare cleanly (avoid factor vs character mismatches)
-      pc_df$sample <- as.character(pc_df$sample)
-      clin[[sample_col]] <- as.character(clin[[sample_col]])
-      
-      # Guard against duplicates (common source of ordering mismatch)
-      if (anyDuplicated(pc_df$sample)) {
-        dup <- unique(pc_df$sample[duplicated(pc_df$sample)])
-        validate(need(FALSE, paste0("Duplicate sample IDs in PCA scores: ", paste(dup, collapse = ", "))))
-      }
-      if (anyDuplicated(clin[[sample_col]])) {
-        dup <- unique(clin[[sample_col]][duplicated(clin[[sample_col]])])
-        validate(need(FALSE, paste0("Duplicate sample IDs in clinical sample ID column: ", paste(dup, collapse = ", "))))
-      }
-      
-      common_ids <- intersect(pc_df$sample, clin[[sample_col]])
-      validate(need(length(common_ids) >= 2, "Need overlapping samples between RNA-seq and clinical."))
-      
-      # Align deterministically by common_ids ordering
-      pc_sub <- pc_df %>%
-        dplyr::filter(sample %in% common_ids) %>%
-        dplyr::arrange(sample)
-      
-      clin_sub <- clin %>%
-        dplyr::filter(.data[[sample_col]] %in% common_ids) %>%
-        dplyr::arrange(.data[[sample_col]])
-      
-      validate(need(all(pc_sub$sample == clin_sub[[sample_col]]),
-                    "Sample ordering mismatch after alignment. Check duplicated sample IDs or hidden whitespace."))
-      
-      hpv_vec <- clin_sub[[hpv_col]]
-      
-      # Known HPV indices (for training)
-      known_idx <- !is_unknown_label(hpv_vec)
-      validate(need(any(known_idx), "No non-unknown HPV values available for thresholding."))
-      
-      # Infer neg/pos from knowns + apply user flip, return ready-to-use factor
-      inf <- infer_binary_group(
-        x            = hpv_vec,
-        flip         = isTRUE(hpv_flip_state()),
-        drop_unknown = TRUE
-      )
-      
-      group_train <- inf$train_group
-      validate(need(is.factor(group_train) && nlevels(group_train) == 2L,
-                    "HPV status must resolve to exactly 2 levels after inference."))
-      
-      # Subset PC scores to the same known subset
-      pc_thr <- pc_sub[known_idx, , drop = FALSE]
-      validate(need(nrow(pc_thr) == length(group_train),
-                    "Internal mismatch: training samples and training groups differ in length."))
-      
-      # Training vector: only known HPV
-      x_pc1_train <- pc_thr$PC1
-      names(x_pc1_train) <- pc_thr$sample
-      # Full vector: all overlapping samples (including unknown)
-      x_pc1_all <- pc_sub$PC1
-      names(x_pc1_all) <- pc_sub$sample
-      
-      # Thresholds learned on known subset
-      thr_res <- determine_threshold_two_groups(
-        x              = x_pc1_train,
-        group          = group_train,  # ordered as (neg, pos)
-        methods        = c("youden", "gaussian_auto", "gmm"),
-        var_label      = "PC1 score",
-        digits         = 3,
-        group_colors   = NULL,
-        method_palette = "Dark2"
-      )
-      
-      # Calls for ALL overlapping samples (including unknowns) using learned thresholds
-      call_all_df <- threshold_predict_all(
-        x_all       = x_pc1_all,
-        x_train     = x_pc1_train,
-        group_train = group_train,
-        res_list    = thr_res$results
-      )
-      
-      pc_sub_for_join <- pc_sub %>%
-        { if (!"PC2" %in% names(.)) dplyr::mutate(., PC2 = NA_real_) else . } %>%
-        dplyr::select(sample, PC1, PC2)
-      
-      # Build augmented clinical table
-      clin_aug <- clin_sub %>%
-        dplyr::left_join(
-          pc_sub_for_join,
-          by = setNames("sample", sample_col)
-        ) %>%
-        dplyr::left_join(
-          call_all_df,
-          by = setNames("sample", sample_col)
-        )
-      
-      # HPV status for plotting, with unknowns explicitly labeled "Unknown"
-      hpv_vec_full <- clin_aug[[hpv_col]]
-      hpv_plot <- as.character(hpv_vec_full)
-      hpv_plot[is_unknown_label(hpv_vec_full)] <- "Unknown"
-      
-      plot_df <- clin_aug
-      plot_df$hpv_plot <- factor(hpv_plot)  # forces discrete palette (prevents 0/1 from becoming continuous/black)
-      
-      # Color options for PCA:
-      color_opts <- c("HPV status" = "hpv_plot")
-      call_cols <- grep("^call_", names(plot_df), value = TRUE)
-      for (cc in call_cols) {
-        method_name <- sub("^call_", "", cc)
-        label <- paste0("Call: ", method_name)
-        color_opts[label] <- cc
-      }
-      
-      list(
-        mode              = "supervised",
-        pca_scores        = pc_df,
-        threshold_res     = thr_res,
-        threshold_plot    = thr_res$plot,
-        pca_data          = plot_df,
-        pca_color_options = color_opts,
-        clin_augmented    = clin_aug,
-        meta_unsupervised = NULL,
-        gmm_threshold     = NULL,
-        gmm_summary_table = NULL,
-        gmm_summary_gt    = NULL,
-        hpv_col_name      = hpv_col
-      )
-      
+    report_function <- if (identical(scoring_method(), "fixed")) {
+      make_fixed_hnscc_report
     } else {
-      # Unsupervised GMM-only branch
-      pc_all <- pc_df %>% dplyr::arrange(sample)
-      x_pc1  <- pc_all$PC1
-      names(x_pc1) <- pc_all$sample
-      
-      gmm_res <- threshold_gmm(x_pc1, group = NULL)
-      gmm_thr <- gmm_res$threshold
-      fit     <- gmm_res$mclust_fit
-      
-      means    <- gmm_res$params$means
-      pos_comp <- which.max(means)
-      
-      comp_idx <- apply(fit$z, 1, which.max)
-      
-      gmm_call <- ifelse(comp_idx == pos_comp, "GMM_high", "GMM_low")
-      gmm_call <- factor(gmm_call, levels = c("GMM_low", "GMM_high"))
-      
-      meta_df <- tibble::tibble(
-        sample   = names(x_pc1),
-        PC1      = as.numeric(x_pc1),
-        gmm_call = gmm_call
-      )
-      
-      summary_raw <- tibble::tibble(
-        method      = "GMM (unsupervised)",
-        threshold   = gmm_thr,
-        accuracy    = NA_real_,
-        sensitivity = NA_real_,
-        specificity = NA_real_
-      )
-      
-      summary_table <- format_threshold_summary(
-        summary_raw,
-        var_label         = "PC1 score",
-        digits            = 3,
-        include_confusion = FALSE
-      )
-      
-      dens_plot <- plot_thresholds(
-        x              = x_pc1,
-        group          = gmm_call,
-        summary_table  = summary_table,
-        var_label      = "PC1 score",
-        group_colors   = NULL,
-        method_palette = NULL
-      )
-      
-      summary_gt <- threshold_gt_table(
-        summary_table,
-        digits   = 3,
-        subtitle = NULL
-      )
-      
-      plot_df <- pc_all %>%
-        dplyr::left_join(
-          meta_df %>% dplyr::select(sample, gmm_call),
-          by = "sample"
-        )
-      
-      color_opts <- c("GMM call" = "gmm_call")
-      
-      list(
-        mode              = "unsupervised",
-        pca_scores        = pc_all,
-        threshold_res     = NULL,
-        threshold_plot    = dens_plot,
-        pca_data          = plot_df,
-        pca_color_options = color_opts,
-        clin_augmented    = NULL,
-        meta_unsupervised = meta_df,
-        gmm_threshold     = gmm_thr,
-        gmm_summary_table = summary_table,
-        gmm_summary_gt    = summary_gt,
-        hpv_col_name      = NULL
-      )
+      make_cohort_hpv_report
     }
-  })
+    
+    report <- report_function(
+      pca = pca,
+      clinical = if (include_clinical) clin_raw() else NULL,
+      sample_col = if (include_clinical) input$sample_id_col else NULL,
+      hpv_col = if (include_clinical) input$hpv_col else NULL,
+      flip = isTRUE(hpv_flip_state())
+    )
+    
+    # Retain the PCA and settings used for this report.
+    report$pca_object <- pca
+    report$preprocessing <- list(
+      effective = preproc_effective(),
+      compatibility = preproc_compatibility(),
+      gene_overlap = gene_overlap()
+    )
+    
+    report
+  })  
   
   observeEvent(input$generate_report, {
     removeModal()
@@ -3617,6 +3432,153 @@ server <- function(input, output, session) {
     plot_pca_colored(df, col_var, label, label_var = label_var)
   })
   
+  ## -----------------------------
+  ## Signature-gene heatmap diagnostic
+  ## -----------------------------
+  hnscc_heatmap_reference <- reactive({
+    reference <- hnscc_reference_data()
+    
+    samples <- rownames(reference$pca$rotated)
+    tcga <- reference$tcga[, samples]
+    
+    genes <- intersect(FILTER_GENE_LIST, rownames(tcga))
+    
+    list(
+      expression = as.matrix(
+        SummarizedExperiment::assay(tcga)[genes, , drop = FALSE]
+      ),
+      hpv = as.character(
+        SummarizedExperiment::colData(tcga)$hpv_status
+      )
+    )
+  })
+  
+  output$signature_heatmap_annotation_ui <- renderUI({
+    res <- analysis()
+    req(res)
+    
+    choices <- c("None" = "", res$pca_color_options)
+    selected <- isolate(input$signature_heatmap_annotation)
+    
+    if (is.null(selected) || !selected %in% unname(choices)) {
+      selected <- if (length(choices) > 1L) {
+        unname(choices[2])
+      } else {
+        ""
+      }
+    }
+    
+    selectInput(
+      "signature_heatmap_annotation",
+      "Annotate uploaded samples by:",
+      choices = choices,
+      selected = selected
+    )
+  })
+  
+  signature_heatmap_res <- reactive({
+    res <- analysis()
+    req(res)
+    
+    expression <- res$pca_object$signature_expression
+    
+    validate(need(
+      ncol(expression) >= 2L,
+      "This heatmap requires at least two uploaded samples for within-cohort scaling."
+    ))
+    
+    reference <- hnscc_heatmap_reference()
+    labels <- NULL
+    annotation_label <- "HPV call"
+    column <- input$signature_heatmap_annotation
+    
+    if (!is.null(column) && nzchar(column)) {
+      metadata <- res$pca_data
+      
+      validate(need(
+        column %in% names(metadata),
+        "Select an available annotation."
+      ))
+      
+      index <- match(colnames(expression), metadata$sample)
+      labels <- metadata[[column]][index]
+      
+      option_index <- match(
+        column,
+        unname(res$pca_color_options)
+      )
+      
+      if (!is.na(option_index)) {
+        annotation_label <- names(
+          res$pca_color_options
+        )[option_index]
+      }
+    }
+    
+    tryCatch(
+      make_signature_heatmap(
+        reference_expression = reference$expression,
+        new_expression = expression,
+        reference_hpv = reference$hpv,
+        new_hpv = labels,
+        annotation_label = annotation_label
+      ),
+      error = function(e) {
+        validate(need(FALSE, conditionMessage(e)))
+      }
+    )
+  })
+  
+  output$signature_heatmap_note <- renderText({
+    result <- signature_heatmap_res()
+    
+    paste0(
+      length(result$genes),
+      " shared genes displayed.",
+      if (length(result$omitted_genes)) {
+        paste0(
+          " Excluded from display because within-cohort z-scores were undefined: ",
+          paste(result$omitted_genes, collapse = ", "),
+          "."
+        )
+      } else {
+        ""
+      }
+    )
+  })
+  
+  draw_signature_heatmap <- function(result) {
+    ComplexHeatmap::draw(
+      result$heatmap,
+      main_heatmap = "HNSCC",
+      column_title = "HPV signature gene expression",
+      heatmap_legend_side = "right",
+      annotation_legend_side = "right"
+    )
+  }
+  
+  output$signature_heatmap_plot <- renderPlot({
+    draw_signature_heatmap(signature_heatmap_res())
+  })
+  
+  output$download_signature_heatmap <- downloadHandler(
+    filename = function() {
+      paste0("signature_heatmap_", Sys.Date(), ".pdf")
+    },
+    content = function(file) {
+      result <- signature_heatmap_res()
+      
+      grDevices::pdf(
+        file,
+        width = 12,
+        height = max(8, length(result$genes) * 0.12)
+      )
+      on.exit(grDevices::dev.off(), add = TRUE)
+      
+      draw_signature_heatmap(result)
+    }
+  )
+  
   
   ## -----------------------------
   ## Threshold plot and table
@@ -3650,6 +3612,11 @@ server <- function(input, output, session) {
   youden_res <- reactive({
     req(analysis())
     res <- analysis()
+    
+    if (identical(res$scoring_method, "fixed")) {
+      return(res$fixed_roc)
+    }
+    
     if (!identical(res$mode, "supervised")) return(NULL)
     
     y <- res$threshold_res$results[["youden"]]
@@ -3660,6 +3627,41 @@ server <- function(input, output, session) {
   
   output$youden_diag_ui <- renderUI({
     y <- youden_res()
+    
+    if (identical(analysis()$scoring_method, "fixed")) {
+      
+      if (is.null(y)) {
+        return(tags$div(
+          class = "text-muted",
+          "ROC evaluation requires known reference labels from both HPV groups."
+        ))
+      }
+      
+      ci_text <- if (all(is.finite(y$auc_ci))) {
+        sprintf("[%.3f, %.3f]", y$auc_ci[1], y$auc_ci[3])
+      } else {
+        "NA"
+      }
+      
+      return(tagList(
+        tags$div(
+          tags$strong("AUC: "),
+          sprintf("%.3f", y$auc)
+        ),
+        tags$div(
+          tags$strong("AUC 95% CI: "),
+          ci_text
+        ),
+        tags$p(
+          class = "text-muted small",
+          paste(
+            "The three HNSCC-derived cutoffs and their performance",
+            "are shown in the threshold table."
+          )
+        )
+      ))
+    }
+    
     if (is.null(y)) {
       return(tags$div(class = "text-muted", "ROC diagnostics available only in supervised mode (clinical labels required)."))
     }
@@ -3675,7 +3677,6 @@ server <- function(input, output, session) {
       style = "margin-bottom: 8px;",
       tags$div(tags$strong("AUC: "), sprintf("%.3f", y$auc)),
       tags$div(tags$strong("AUC 95% CI: "), ci_txt),
-      tags$div(tags$strong("DeLong p-value (AUC>0.5): "), if (is.finite(y$p_value)) sprintf("%.3g", y$p_value) else "NA"),
       tags$div(tags$strong("Youden threshold: "), sprintf("%.3f", y$threshold)),
       tags$div(tags$strong("Sensitivity / Specificity: "),
                sprintf("%.3f / %.3f", y$sensitivity, y$specificity)),
@@ -3695,6 +3696,7 @@ server <- function(input, output, session) {
   ## -----------------------------
   output$meta_preview_dt <- renderDT({
     req(analysis())
+    
     res <- analysis()
     df <- if (res$mode == "supervised") res$clin_augmented else res$meta_unsupervised
     datatable(
@@ -3778,22 +3780,22 @@ server <- function(input, output, session) {
           )
         }
       } else {
-        readr::write_csv(res$meta_unsupervised, file.path(rep_dir, "meta_gmm_calls.csv"))
+        readr::write_csv(res$meta_unsupervised, file.path(rep_dir, "meta_hpv_calls.csv"))
         if (!is.null(res$gmm_summary_table)) {
-          readr::write_csv(res$gmm_summary_table, file.path(rep_dir, "gmm_threshold_summary.csv"))
+          readr::write_csv(res$gmm_summary_table, file.path(rep_dir, "threshold_summary.csv"))
         }
         if (!is.null(res$gmm_summary_gt)) {
           gt::gtsave(
             res$gmm_summary_gt,
-            filename = file.path(rep_dir, "gmm_threshold_summary.html")
+            filename = file.path(rep_dir, "threshold_summary.html")
           )
         }
       }
       
       # 3. Preprocessing summary text (instead of showing overview in the report UI)
-      eff    <- preproc_effective()
-      compat <- preproc_compatibility()
-      go     <- gene_overlap()
+      eff    <- res$preprocessing$effective
+      compat <- res$preprocessing$compatibility
+      go     <- res$preprocessing$gene_overlap
       
       preproc_lines <- c(
         "Preprocessing summary for PCA",
@@ -3852,29 +3854,100 @@ server <- function(input, output, session) {
         device   = "svg"
       )
       
-      # 5b. PCA loadings plot (only if comparable; mirrors UI logic)
-      comp <- preproc_compatibility()
-      if (isTRUE(comp$compatible)) {
-        try({
-          grDevices::svg(file.path(rep_dir, "pca_loadings_PC1.svg"), width = 9, height = 6)
-          print(plot_pcatools_loadings_correlation(hnscc_pca_reactive(), pca_res(), pc = "PC1"))
-          grDevices::dev.off()
-        }, silent = TRUE)
+      # 5b. Loadings comparison uses the PCA stored with this report.
+      comp <- res$preprocessing$compatibility
+      if (!identical(res$scoring_method, "fixed") &&
+          isTRUE(comp$compatible)) {
+        ggplot2::ggsave(
+          filename = file.path(rep_dir, "pca_loadings_PC1.svg"),
+          plot = plot_pcatools_loadings_correlation(
+            hnscc_pca_reactive(),
+            res$pca_object,
+            pc = "PC1"
+          ),
+          width = 9,
+          height = 6,
+          device = "svg"
+        )
       }
       
       # 5c. ROC plot (Youden) in supervised mode
       if (identical(res$mode, "supervised")) {
-        y <- res$threshold_res$results[["youden"]]
+        y <- if (identical(res$scoring_method, "fixed")) {
+          res$fixed_roc
+        } else {
+          res$threshold_res$results[["youden"]]
+        }
         if (!is.null(y) && !is.null(y$roc_plot)) {
           try({
             ggplot2::ggsave(
-              filename = file.path(rep_dir, "youden_roc.svg"),
+              filename = file.path(
+                rep_dir,
+                if (identical(res$scoring_method, "fixed")) {
+                  "fixed_hnscc_roc.svg"
+                } else {
+                  "youden_roc.svg"
+                }
+              ),
               plot     = y$roc_plot,
               width    = 9, height = 6, dpi = 300,
               device   = "svg"
             )
           }, silent = TRUE)
         }
+      }
+      
+      # Record the analysis approach and fixed reference when applicable.
+      writeLines(
+        if (identical(res$scoring_method, "fixed")) {
+          c(
+            "Analysis approach: Fixed HNSCC",
+            "HNSCC gene means, PCA weights, threshold and direction were retained.",
+            "Missing genes contributed zero after HNSCC-mean centering.",
+            paste(
+              "Missing genes:",
+              if (length(res$pca_object$missing_genes)) {
+                paste(res$pca_object$missing_genes, collapse = ", ")
+              } else {
+                "None"
+              }
+            )
+          )
+        } else {
+          "Analysis approach: Cohort-based"
+        },
+        file.path(rep_dir, "analysis_method.txt")
+      )
+      
+      if (identical(res$scoring_method, "fixed")) {
+        saveRDS(
+          res$pca_object$fixed_reference,
+          file.path(rep_dir, "fixed_hnscc_reference.rds")
+        )
+      }
+      
+      # Signature heatmap for the current annotation selection.
+      heatmap_result <- tryCatch(
+        signature_heatmap_res(),
+        error = function(e) e
+      )
+      
+      if (inherits(heatmap_result, "error")) {
+        writeLines(
+          conditionMessage(heatmap_result),
+          file.path(rep_dir, "signature_heatmap_unavailable.txt")
+        )
+      } else {
+        local({
+          grDevices::pdf(
+            file.path(rep_dir, "signature_heatmap.pdf"),
+            width = 12,
+            height = max(8, length(heatmap_result$genes) * 0.12)
+          )
+          on.exit(grDevices::dev.off(), add = TRUE)
+          
+          draw_signature_heatmap(heatmap_result)
+        })
       }
       
       
